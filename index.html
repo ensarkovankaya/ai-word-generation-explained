@@ -148,6 +148,41 @@
     cursor: pointer;
   }
   #speed-val { font-family: monospace; color: #c9d1d9; min-width: 32px; }
+  .node.root {
+    cursor: pointer;
+    user-select: none;
+  }
+  .node.root:hover {
+    border-color: #4fc3f7;
+    opacity: 0.6;
+  }
+  .node.root.active:hover { opacity: 1; }
+  #word-picker {
+    position: absolute;
+    z-index: 20;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 6px 0;
+    display: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  #word-picker.show { display: block; }
+  .picker-item {
+    padding: 8px 20px;
+    cursor: pointer;
+    font-size: 1rem;
+    color: #c9d1d9;
+    transition: background 0.15s, color 0.15s;
+  }
+  .picker-item:hover {
+    background: #21262d;
+    color: #4fc3f7;
+  }
+  .picker-item.selected {
+    color: #4fc3f7;
+    font-weight: 600;
+  }
 </style>
 </head>
 <body>
@@ -160,18 +195,54 @@
 <div id="board">
   <svg id="lines"></svg>
   <div id="ball"></div>
+  <div id="word-picker"></div>
 </div>
 <div id="sentence"></div>
 <button id="restart">Drop again</button>
 
 <script>
-const levels = [
-  ["The"],
-  ["cat", "world"],
-  ["sat", "sleeps", "is"],
-  ["on", "quietly", "always", "changing"],
-  ["the", "now", "forever", "rapidly", "mat"]
-];
+const wordGroups = {
+  "The": [
+    ["The"],
+    ["cat", "world"],
+    ["sat", "sleeps", "is"],
+    ["on", "quietly", "always", "changing"],
+    ["the", "now", "forever", "rapidly", "mat"]
+  ],
+  "I": [
+    ["I"],
+    ["want", "think"],
+    ["to", "about", "that"],
+    ["learn", "explore", "this", "something"],
+    ["more", "deeply", "works", "new", "today"]
+  ],
+  "She": [
+    ["She"],
+    ["can", "will"],
+    ["build", "never", "create"],
+    ["amazing", "stop", "something", "things"],
+    ["things", "learning", "beautiful", "here", "fast"]
+  ],
+  "We": [
+    ["We"],
+    ["should", "must"],
+    ["always", "never", "try"],
+    ["keep", "forget", "to", "something"],
+    ["going", "why", "understand", "new", "forward"]
+  ],
+  "It": [
+    ["It"],
+    ["seems", "was"],
+    ["like", "very", "always"],
+    ["a", "hard", "meant", "good"],
+    ["dream", "to", "for", "enough", "idea"]
+  ]
+};
+
+const rootWords = Object.keys(wordGroups);
+let currentRoot = rootWords[0];
+let levels = wordGroups[currentRoot];
+let animating = false;
 
 const board = document.getElementById('board');
 const svg = document.getElementById('lines');
@@ -180,6 +251,7 @@ const sentenceEl = document.getElementById('sentence');
 const restartBtn = document.getElementById('restart');
 const speedSlider = document.getElementById('speed-slider');
 const speedVal = document.getElementById('speed-val');
+const picker = document.getElementById('word-picker');
 
 let speed = 1;
 speedSlider.addEventListener('input', () => {
@@ -187,11 +259,44 @@ speedSlider.addEventListener('input', () => {
   speedVal.textContent = speed + 'x';
 });
 
-let nodeEls = []; // nodeEls[level][index]
-let lineEls = []; // lineEls[level][parentIdx] = {left: line, right: line}
+let nodeEls = [];
+let lineEls = [];
+
+function buildPicker() {
+  picker.innerHTML = '';
+  rootWords.forEach(w => {
+    const item = document.createElement('div');
+    item.className = 'picker-item' + (w === currentRoot ? ' selected' : '');
+    item.textContent = w;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      picker.classList.remove('show');
+      if (w !== currentRoot) {
+        currentRoot = w;
+        levels = wordGroups[currentRoot];
+        build();
+      }
+    });
+    picker.appendChild(item);
+  });
+}
+
+function showPicker() {
+  if (animating) return;
+  buildPicker();
+  const rootNode = nodeEls[0][0];
+  const r = rootNode.getBoundingClientRect();
+  const br = board.getBoundingClientRect();
+  picker.style.left = (r.left - br.left + r.width / 2 - 40) + 'px';
+  picker.style.top = (r.top - br.top + r.height + 8) + 'px';
+  picker.classList.add('show');
+}
+
+document.addEventListener('click', (e) => {
+  if (!picker.contains(e.target)) picker.classList.remove('show');
+});
 
 function build() {
-  // Clear previous
   board.querySelectorAll('.row').forEach(r => r.remove());
   svg.innerHTML = '';
   nodeEls = [];
@@ -215,7 +320,14 @@ function build() {
     nodeEls.push(rowNodes);
   });
 
-  // Draw lines after layout settles
+  // Make root clickable
+  const rootNode = nodeEls[0][0];
+  rootNode.classList.add('root');
+  rootNode.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showPicker();
+  });
+
   requestAnimationFrame(() => {
     const boardRect = board.getBoundingClientRect();
     for (let lvl = 0; lvl < levels.length - 1; lvl++) {
@@ -224,7 +336,6 @@ function build() {
         const pRect = nodeEls[lvl][i].getBoundingClientRect();
         const px = pRect.left + pRect.width / 2 - boardRect.left;
         const py = pRect.top + pRect.height - boardRect.top;
-
         const makeL = (ci) => {
           const cRect = nodeEls[lvl + 1][ci].getBoundingClientRect();
           const cx = cRect.left + cRect.width / 2 - boardRect.left;
@@ -258,7 +369,6 @@ function animateBall(from, to, duration) {
     const dx = to.x - 7 - fx, dy = to.y - 7 - fy;
     function tick(now) {
       let t = Math.min((now - start) / duration, 1);
-      // ease-in quad
       t = t * t;
       ball.style.left = (fx + dx * t) + 'px';
       ball.style.top = (fy + dy * t) + 'px';
@@ -270,11 +380,11 @@ function animateBall(from, to, duration) {
 }
 
 async function animate() {
+  animating = true;
   ball.style.opacity = '0';
   sentenceEl.classList.remove('show');
   restartBtn.classList.remove('show');
 
-  // Pick random path
   const path = [0];
   const randoms = [];
   for (let lvl = 0; lvl < levels.length - 1; lvl++) {
@@ -283,11 +393,8 @@ async function animate() {
     path.push(r < 0.5 ? path[lvl] : path[lvl] + 1);
   }
 
-  // Start: light up root
   const root = nodeEls[0][0];
   root.classList.add('active');
-
-  // Position ball at root
   const rootC = getCenter(root);
   ball.style.left = (rootC.x - 7) + 'px';
   ball.style.top = (rootC.y - 7) + 'px';
@@ -295,25 +402,20 @@ async function animate() {
 
   await delay(500 / speed);
 
-  // Animate through levels
   for (let lvl = 0; lvl < levels.length - 1; lvl++) {
     const parentIdx = path[lvl];
     const childIdx = path[lvl + 1];
     const r = randoms[lvl];
     const side = r < 0.5 ? 'left' : 'right';
 
-    // Highlight line
     lineEls[lvl][parentIdx][side].classList.add('active');
 
-    // Animate ball to child
     const target = getCenter(nodeEls[lvl + 1][childIdx]);
     await animateBall(getCenter(nodeEls[lvl][parentIdx]), target, 450 / speed);
 
-    // Activate child node
     const childNode = nodeEls[lvl + 1][childIdx];
     childNode.classList.add('active');
 
-    // Show random number
     const rng = childNode.querySelector('.rng');
     rng.textContent = r.toFixed(2);
     rng.classList.add('show');
@@ -321,18 +423,19 @@ async function animate() {
     await delay(400 / speed);
   }
 
-  // Build sentence
   const words = path.map((idx, lvl) => levels[lvl][idx]);
   sentenceEl.textContent = '"' + words.join(' ') + '"';
   sentenceEl.classList.add('show');
 
   await delay(300 / speed);
   restartBtn.classList.add('show');
+  animating = false;
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function reset() {
+  if (animating) return;
   nodeEls.flat().forEach(n => {
     n.classList.remove('active');
     const rng = n.querySelector('.rng');
